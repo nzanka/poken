@@ -30,3 +30,16 @@ jobs:
         with:
           name: pokeun-gil-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Smoke test on emulator
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          script: adb install -r build/app/outputs/flutter-apk/app-release.apk; adb shell monkey -p com.pokeungil.pokeun_gil -c android.intent.category.LAUNCHER 1; sleep 20; adb shell pidof com.pokeungil.pokeun_gil || echo APP_NOT_RUNNING; adb logcat -d | grep -E "AndroidRuntime|FATAL|flutter" | tail -50
