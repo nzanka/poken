@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/game_engine.dart';
@@ -6,14 +7,28 @@ import 'services/storage.dart';
 
 const _supaUrl = String.fromEnvironment('SUPABASE_URL');
 const _supaKey = String.fromEnvironment('SUPABASE_ANON_KEY');
-const _useHealth = bool.fromEnvironment('USE_HEALTH'); // 실기기: --dart-define=USE_HEALTH=true
+const _useHealth = bool.fromEnvironment('USE_HEALTH');
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  if (_supaUrl.isNotEmpty) {
-    await Supabase.initialize(url: _supaUrl, anonKey: _supaKey);
-  }
-  runApp(const PokeunGilApp());
+void main() {
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    ErrorWidget.builder = (d) => Material(
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: SingleChildScrollView(
+                child: Text('오류가 발생했어요\n\n${d.exceptionAsString()}'),
+              ),
+            ),
+          ),
+        );
+    try {
+      if (_supaUrl.isNotEmpty) {
+        await Supabase.initialize(url: _supaUrl, anonKey: _supaKey);
+      }
+    } catch (_) {}
+    runApp(const PokeunGilApp());
+  }, (e, st) => debugPrint('uncaught: $e'));
 }
 
 class PokeunGilApp extends StatelessWidget {
@@ -37,9 +52,10 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final ActivitySource _source = _useHealth ? HealthActivitySource() : MockActivitySource();
+  ActivitySource _source = MockActivitySource();
   GameState? _s;
   ActivityDay _today = const ActivityDay();
+  String? _note;
 
   @override
   void initState() {
@@ -48,35 +64,65 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _init() async {
-    _s = await Storage.load();
-    if (_s != null) await _refresh();
-    setState(() {});
+    try {
+      _s = await Storage.load();
+    } catch (_) {}
+    if (_s != null) await _connect();
+    if (mounted) setState(() {});
   }
 
   Future<void> _pickMode(PlayMode m) async {
-    _s = GameState(mode: m);
-    await _source.requestPermissions();
-    await Storage.save(_s!);
-    await _refresh();
+    setState(() => _s = GameState(mode: m));
+    try {
+      await Storage.save(_s!);
+    } catch (_) {}
+    await _connect();
+  }
+
+  Future<void> _connect() async {
+    if (!_useHealth) {
+      await _refresh();
+      return;
+    }
+    try {
+      final h = HealthActivitySource();
+      final ok = await h.requestPermissions();
+      if (!ok) throw Exception('건강 데이터 권한이 허용되지 않았어요');
+      _source = h;
+      await _refresh();
+    } catch (e) {
+      _source = MockActivitySource();
+      if (mounted) {
+        setState(() => _note = '건강 데이터를 읽지 못해 테스트 모드로 실행 중이에요\n($e)');
+      }
+    }
   }
 
   Future<void> _refresh() async {
-    _today = await _source.fetchDay(DateTime.now());
+    try {
+      _today = await _source.fetchDay(DateTime.now());
+    } catch (e) {
+      _source = MockActivitySource();
+      _note = '걸음 수를 읽지 못해 테스트 모드로 실행 중이에요\n($e)';
+    }
     if (mounted) setState(() {});
   }
 
   Future<void> _claim() async {
     final r = GameEngine.claim(_s!, _today);
-    await Storage.save(_s!);
+    try {
+      await Storage.save(_s!);
+    } catch (_) {}
     if (!mounted) return;
     setState(() {});
-    final msg = r.xpGained == 0 ? '받을 보상이 없어요' : '경험치 +${r.xpGained}'
-        '${r.levelsGained > 0 ? ' · 레벨업!' : ''}'
-        '${r.events.contains('boss_defeated') ? ' · 보스 격파!' : ''}';
+    final msg = r.xpGained == 0
+        ? '받을 보상이 없어요'
+        : '경험치 +${r.xpGained}'
+            '${r.levelsGained > 0 ? ' · 레벨업!' : ''}'
+            '${r.events.contains('boss_defeated') ? ' · 보스 격파!' : ''}';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // 개발용: 에뮬레이터에서 걸음 수를 올려본다.
   void _debugAdd(int steps) {
     final src = _source;
     if (src is MockActivitySource) {
@@ -98,13 +144,18 @@ class _HomePageState extends State<HomePage> {
         const SizedBox(height: 8),
         LinearProgressIndicator(value: s.xp / GameEngine.needXp(s.level), minHeight: 14),
         const SizedBox(height: 16),
+        if (_note != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(_note!, style: TextStyle(color: Colors.red.shade700)),
+          ),
         Text('오늘 ${_today.steps}보 · 달리기 ${_today.runKm.toStringAsFixed(1)}km'),
         if (s.mode == PlayMode.run) Text('스피드 스탯 ${s.speedStat.toStringAsFixed(1)}'),
         if (GameEngine.bossAlive(s)) Text('👿 보스 남은 HP ${s.bossHp}'),
         const SizedBox(height: 16),
         FilledButton(onPressed: _claim, child: const Text('보상 받기')),
         OutlinedButton(onPressed: _refresh, child: const Text('걸음 새로고침')),
-        if (!_useHealth) ...[
+        if (_source is MockActivitySource) ...[
           const Divider(),
           Wrap(spacing: 8, children: [
             for (final n in [500, 1000, 3000])
