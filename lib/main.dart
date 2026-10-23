@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/game_engine.dart';
@@ -57,6 +58,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   ActivityDay _today = const ActivityDay();
   String? _note; // 건강 데이터 연결 문제 안내
   String? _info; // 일반 안내 (자동 정산 등)
+  String? _diag; // 걸음 수가 0일 때 진단 정보
 
   @override
   void initState() {
@@ -143,6 +145,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     try {
       await _rollIfNeeded();
       _today = await _source.fetchDay(DateTime.now());
+      final src = _source;
+      _diag = (src is HealthActivitySource && _today.steps == 0) ? await src.diagnose() : null;
     } catch (e) {
       _source = MockActivitySource();
       _note = '걸음 수를 읽지 못해 테스트 모드로 실행 중이에요\n($e)';
@@ -161,6 +165,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             '${r.levelsGained > 0 ? ' · 레벨업!' : ''}'
             '${r.events.contains('boss_defeated') ? ' · 보스 격파!' : ''}';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _openHcSettings() async {
+    for (final a in [
+      'android.health.connect.action.HEALTH_HOME_SETTINGS',
+      'androidx.health.ACTION_HEALTH_CONNECT_SETTINGS',
+    ]) {
+      try {
+        await AndroidIntent(action: a).launch();
+        return;
+      } catch (_) {}
+    }
+    if (mounted) {
+      setState(() => _info = 'Health Connect 설정을 열 수 없어요. 폰 설정에서 Health Connect를 검색해 직접 열어 주세요.');
+    }
   }
 
   void _debugAdd(int steps) {
@@ -199,11 +218,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             child: Text(_info!, style: TextStyle(color: Colors.green.shade800)),
           ),
         Text('오늘 ${_today.steps}보 · 달리기 ${_today.runKm.toStringAsFixed(1)}km'),
-        if (healthZero)
+        if (healthZero) ...[
           const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: Text('걸음 수가 0이에요. 삼성 헬스 → 설정 → Health Connect에서 걸음 수 공유를 켜 주세요.'),
+            padding: EdgeInsets.only(top: 4, bottom: 4),
+            child: Text('걸음 수가 0이에요. Health Connect에서 두 가지를 확인해 주세요.\n'
+                '1) 앱 권한 → 삼성 헬스: 걸음 수 "쓰기" 허용\n'
+                '2) 앱 권한 → 포근길: 걸음 수 "읽기" 허용'),
           ),
+          OutlinedButton(onPressed: _openHcSettings, child: const Text('Health Connect 설정 열기')),
+          if (_diag != null)
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.black12,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText('진단 정보\n$_diag', style: const TextStyle(fontSize: 13)),
+            ),
+        ],
         if (s.streak > 0) Text('🔥 ${s.streak}일 연속'),
         if (s.mode == PlayMode.run) Text('스피드 스탯 ${s.speedStat.toStringAsFixed(1)}'),
         if (GameEngine.bossAlive(s)) Text('👿 보스 남은 HP ${s.bossHp}'),

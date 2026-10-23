@@ -13,6 +13,7 @@ dependencies:
   shared_preferences: ^2.2.0
   supabase_flutter: ^2.5.0   # 크루, 레이드 서버
   home_widget: ^0.6.0        # 홈 화면 위젯 (2차)
+  android_intent_plus: ^5.0.0 # Health Connect 설정 화면 열기
 
 dev_dependencies:
   flutter_test:
