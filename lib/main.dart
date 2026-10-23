@@ -51,16 +51,36 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   ActivitySource _source = MockActivitySource();
   GameState? _s;
   ActivityDay _today = const ActivityDay();
-  String? _note;
+  String? _note; // 건강 데이터 연결 문제 안내
+  String? _info; // 일반 안내 (자동 정산 등)
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _init();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // 앱으로 돌아올 때마다 걸음 수를 다시 읽고, 날짜가 바뀌었으면 정산한다.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _s != null) _refresh();
+  }
+
+  Future<void> _save() async {
+    try {
+      if (_s != null) await Storage.save(_s!);
+    } catch (_) {}
   }
 
   Future<void> _init() async {
@@ -72,14 +92,13 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _pickMode(PlayMode m) async {
-    setState(() => _s = GameState(mode: m));
-    try {
-      await Storage.save(_s!);
-    } catch (_) {}
+    setState(() => _s = GameState(mode: m, lastDay: GameEngine.ymd(DateTime.now())));
+    await _save();
     await _connect();
   }
 
   Future<void> _connect() async {
+    if (mounted) setState(() => _note = null);
     if (!_useHealth) {
       await _refresh();
       return;
@@ -98,8 +117,31 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // 날짜가 바뀌었으면 지난 날 보상을 자동 정산하고 하루를 넘긴다.
+  Future<void> _rollIfNeeded() async {
+    final s = _s;
+    if (s == null) return;
+    final now = DateTime.now();
+    if (s.lastDay.isEmpty) {
+      s.lastDay = GameEngine.ymd(now);
+      await _save();
+      return;
+    }
+    if (!GameEngine.isNewDay(s, now)) return;
+    ActivityDay last;
+    try {
+      last = await _source.fetchDay(DateTime.parse(s.lastDay));
+    } catch (_) {
+      last = const ActivityDay();
+    }
+    final r = GameEngine.settleAndRoll(s, now, last);
+    _info = r.xpGained > 0 ? '어제 못 받은 보상 +${r.xpGained} 경험치를 자동으로 받았어요' : null;
+    await _save();
+  }
+
   Future<void> _refresh() async {
     try {
+      await _rollIfNeeded();
       _today = await _source.fetchDay(DateTime.now());
     } catch (e) {
       _source = MockActivitySource();
@@ -110,11 +152,9 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _claim() async {
     final r = GameEngine.claim(_s!, _today);
-    try {
-      await Storage.save(_s!);
-    } catch (_) {}
+    await _save();
     if (!mounted) return;
-    setState(() {});
+    setState(() => _info = null);
     final msg = r.xpGained == 0
         ? '받을 보상이 없어요'
         : '경험치 +${r.xpGained}'
@@ -136,6 +176,7 @@ class _HomePageState extends State<HomePage> {
     final s = _s;
     if (s == null) return _ModeSelect(onPick: _pickMode);
     final map = kMaps[s.mapIndex];
+    final healthZero = _source is HealthActivitySource && _today.steps == 0;
     return Scaffold(
       appBar: AppBar(title: Text('${map.name} · ${s.pos}/${map.length}칸')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
@@ -144,12 +185,26 @@ class _HomePageState extends State<HomePage> {
         const SizedBox(height: 8),
         LinearProgressIndicator(value: s.xp / GameEngine.needXp(s.level), minHeight: 14),
         const SizedBox(height: 16),
-        if (_note != null)
+        if (_note != null) ...[
+          Text(_note!, style: TextStyle(color: Colors.red.shade700)),
+          if (_useHealth)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: OutlinedButton(onPressed: _connect, child: const Text('건강 데이터 다시 연결')),
+            ),
+        ],
+        if (_info != null)
           Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(_note!, style: TextStyle(color: Colors.red.shade700)),
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(_info!, style: TextStyle(color: Colors.green.shade800)),
           ),
         Text('오늘 ${_today.steps}보 · 달리기 ${_today.runKm.toStringAsFixed(1)}km'),
+        if (healthZero)
+          const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text('걸음 수가 0이에요. 삼성 헬스 → 설정 → Health Connect에서 걸음 수 공유를 켜 주세요.'),
+          ),
+        if (s.streak > 0) Text('🔥 ${s.streak}일 연속'),
         if (s.mode == PlayMode.run) Text('스피드 스탯 ${s.speedStat.toStringAsFixed(1)}'),
         if (GameEngine.bossAlive(s)) Text('👿 보스 남은 HP ${s.bossHp}'),
         const SizedBox(height: 16),

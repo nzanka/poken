@@ -41,6 +41,7 @@ class GameState {
   int streak;
   int companionBonusPct;
   bool subscribed;
+  String lastDay; // 마지막으로 접속한 날짜 (yyyy-MM-dd)
 
   GameState({
     this.mode = PlayMode.walk,
@@ -56,6 +57,7 @@ class GameState {
     this.streak = 0,
     this.companionBonusPct = 0,
     this.subscribed = false,
+    this.lastDay = '',
   }) : wonBosses = wonBosses ?? <int>{};
 
   Map<String, dynamic> toJson() => {
@@ -72,6 +74,7 @@ class GameState {
         'streak': streak,
         'companionBonusPct': companionBonusPct,
         'subscribed': subscribed,
+        'lastDay': lastDay,
       };
 
   factory GameState.fromJson(Map<String, dynamic> j) => GameState(
@@ -88,6 +91,7 @@ class GameState {
         streak: j['streak'] ?? 0,
         companionBonusPct: j['companionBonusPct'] ?? 0,
         subscribed: j['subscribed'] ?? false,
+        lastDay: j['lastDay'] ?? '',
       );
 }
 
@@ -204,5 +208,24 @@ class GameEngine {
     s.streak = u >= 1000 ? s.streak + 1 : 0;
     s.claimedUnits = 0;
     s.claimedRunKm = 0;
+  }
+
+  static String ymd(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static bool isNewDay(GameState s, DateTime now) =>
+      s.lastDay.isNotEmpty && s.lastDay != ymd(now);
+
+  /// 날짜가 바뀌었을 때 호출: 지난 날 못 받은 보상을 자동 정산하고 연속일을 갱신한다.
+  static ClaimResult settleAndRoll(GameState s, DateTime now, ActivityDay lastActivity) {
+    final r = claim(s, lastActivity);
+    final a = DateTime.parse(s.lastDay);
+    final gap = DateTime.utc(now.year, now.month, now.day)
+        .difference(DateTime.utc(a.year, a.month, a.day))
+        .inDays;
+    rollDay(s, lastActivity);
+    if (gap > 1) s.streak = 0;
+    s.lastDay = ymd(now);
+    return r;
   }
 }

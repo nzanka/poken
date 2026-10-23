@@ -48,4 +48,24 @@ void main() {
     expect(s.mapIndex, 1);
     expect(s.pos, 0);
   });
+
+  test('새 날이 되면 어제 못 받은 보상을 정산하고 연속일이 늘어난다', () {
+    final s = GameState(lastDay: '2026-10-22');
+    final r = GameEngine.settleAndRoll(s, DateTime(2026, 10, 23), const ActivityDay(steps: 2000));
+    expect(r.xpGained, 200);
+    expect(s.streak, 1);
+    expect(s.claimedUnits, 0);
+    expect(s.lastDay, '2026-10-23');
+  });
+
+  test('이틀 이상 비면 연속일이 끊긴다', () {
+    final s = GameState(lastDay: '2026-10-20', streak: 5);
+    GameEngine.settleAndRoll(s, DateTime(2026, 10, 23), const ActivityDay(steps: 2000));
+    expect(s.streak, 0);
+  });
+
+  test('같은 날이면 새 날로 보지 않는다', () {
+    final s = GameState(lastDay: '2026-10-23');
+    expect(GameEngine.isNewDay(s, DateTime(2026, 10, 23, 18)), false);
+  });
 }
